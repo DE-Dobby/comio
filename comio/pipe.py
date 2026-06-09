@@ -1,9 +1,9 @@
-"""Streaming pipe: Listener → Handler → Writer.
+"""Streaming pipe: Listener -> Handler -> Writer.
 
 Connects a push-based source to a sink through a transformation handler,
 using in-memory streams with configurable backpressure.
 
-    src ──→ [in_stream] ──→ handler ──→ [out_stream] ──→ dest
+    src --> [in_stream] --> handler --> [out_stream] --> dest
 
 Three concurrent tasks (ingress / process / egress) are managed
 by an anyio task group. When the source is exhausted, streams close
@@ -17,7 +17,6 @@ import typing as t
 import anyio
 
 from .io import Listener, Writer
-
 
 
 In = t.TypeVar("In", covariant=True)
@@ -84,7 +83,7 @@ async def _pipe(
     async def ingress() -> None:
         """src → in_stream. Closes in_send when the source is exhausted."""
         async with in_send:
-            async for item in await src.listen():
+            async for item in src.listen():
                 await in_send.send(item)
 
     async def process() -> None:

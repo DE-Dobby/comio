@@ -1,17 +1,18 @@
-"""Composable I/O primitives.
+"""Composable async I/O primitives.
 
-Defines four protocol interfaces for asynchronous data flow:
+Protocols:
 
-    Reader: pull-based, paginated source  (read → Page)
-    Writer: single-item sink              (write)
-    Batch: multi-item sink               (batch)
-    Listener: push-based, streaming source  (listen → AsyncIterator)
+    Reader:   pull-based, paginated source   (read → Page)
+    Listener: push-based, streaming source   (listen → AsyncIterator)
+    Writer:   single-item sink               (write)
+    Batcher:  multi-item sink                (batch)
 
-And composable functions that wire them together:
+Functions:
 
-    scroll:  iterate pages from a Reader
-    read_all: drain a Reader into a list
-    copy:     connect any source to any sink
+    scroll:      iterate pages from a Reader
+    read_all:    drain a Reader into a list
+    copy:        buffer a Listener into a Batcher
+    as_listener: convert a Reader into a Listener
 """
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ class Listener(t.Protocol, t.Generic[T_co]):
     a Listener yields items as they become available.
     """
 
-    async def listen(self) -> t.AsyncIterator[T_co]:
+    def listen(self) -> t.AsyncIterator[T_co]:
         """Start listening and yield items as they arrive.
 
         The iterator completes when the source is exhausted or closed.
@@ -115,8 +116,6 @@ class Batcher(t.Protocol, t.Generic[T_contra]):
     async def batch(self, items: t.Sequence[T_contra]) -> None:
         """Write a batch of items to the destination."""
         ...
-
-
 
 
 async def scroll(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = None) -> t.AsyncIterator[Page[T_co]]:
@@ -167,7 +166,7 @@ async def copy(src: Listener[T_co], dst: Batcher[T_co], n: int) -> None:
         n: Buffer size. Flushes every ``n`` items, plus any remainder at the end.
     """
     buf: t.List[T_co] = []
-    async for item in await src.listen():
+    async for item in src.listen():
         buf.append(item)
         if len(buf) >= n:
             await dst.batch(buf)
@@ -176,22 +175,17 @@ async def copy(src: Listener[T_co], dst: Batcher[T_co], n: int) -> None:
         await dst.batch(buf)
 
 
-async def as_listener(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = None) -> t.AsyncIterator[T_co]:
-    """Convert a Reader into an item-level AsyncIterator.
+def as_listener(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = None) -> Listener[T_co]:
+    """Convert a Reader into a Listener.
 
-    Normalizes a pull-based Reader into the same shape as Listener.listen(),
-    so downstream code can treat both sources uniformly.
-
-    Args:
-        r: The reader to convert.
-        cursor: Starting position.
-        n: Page size passed to the reader.
-
-    Yields:
-        Individual items from each page.
+    Returns a Listener whose ``listen()`` yields individual items
+    from the Reader's pages, so downstream code (e.g. ``copy``, ``pipe``)
+    can treat both sources uniformly.
     """
-    async for page in scroll(r, cursor=cursor, n=n):
-        for item in page.items:
-            yield item
+    class _Listener:
+        async def listen(self) -> t.AsyncIterator[T_co]:
+            async for page in scroll(r, cursor=cursor, n=n):
+                for item in page.items:
+                    yield item
 
-
+    return _Listener()

@@ -75,8 +75,12 @@ def copy(src: Listener[T_co], dst: Batcher[T_co], n: int) -> None:
         dst.batch(buf)
 
 
-def as_listener(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = None) -> t.Iterator[T_co]:
-    """Convert a Reader into an item-level Iterator."""
-    for page in scroll(r, cursor=cursor, n=n):
-        for item in page.items:
-            yield item
+def as_listener(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = None) -> Listener[T_co]:
+    """Convert a sync Reader into a Listener."""
+    class _Listener:
+        def listen(self) -> t.Iterator[T_co]:
+            for page in scroll(r, cursor=cursor, n=n):
+                for item in page.items:
+                    yield item
+
+    return _Listener()

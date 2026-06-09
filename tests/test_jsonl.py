@@ -2,6 +2,9 @@ import io
 import json
 import pytest
 
+import comio
+import typing as t
+
 from comio import scroll, read_all, EOF
 from comio.sync import scroll as sync_scroll, read_all as sync_read_all
 from comio.adapters.jsonl import JsonL, AsyncJsonL
@@ -146,3 +149,81 @@ async def test_async_read_all_from_cursor(sample_file):
     first = await reader.read()
     items = await read_all(reader, cursor=first.next_cursor)
     assert items == [{"id": 1}, {"id": 2}]
+
+
+class AsyncJsonLBatcher:
+    def __init__(self, f):
+        self.f = f
+
+    async def batch(self, items: t.Sequence[dict]) -> None:
+        for item in items:
+            self.f.write(json.dumps(item) + "\n")
+        self.f.flush()
+
+
+@pytest.mark.asyncio
+async def test_copy_via_as_listener(sample_file):
+    reader = AsyncJsonL(sample_file)
+    out = io.StringIO()
+    batcher = AsyncJsonLBatcher(out)
+
+    listener = comio.as_listener(reader)
+    await comio.copy(listener, batcher, n=2)
+
+    out.seek(0)
+    lines = [json.loads(l) for l in out.read().strip().split("\n")]
+    assert lines == [{"id": 0}, {"id": 1}, {"id": 2}]
+
+
+
+@pytest.mark.asyncio
+async def test_pipe(sample_file):
+    from comio import pipe
+
+    reader = AsyncJsonL(sample_file)
+    out = io.StringIO()
+    writer = AsyncJsonL(out)
+    listener = comio.as_listener(reader)
+
+    async def add_flag(item: dict) -> dict:
+        return {**item, "processed": True}
+
+    await pipe(listener, writer, add_flag)
+
+    out.seek(0)
+    lines = [json.loads(l) for l in out.read().strip().split("\n")]
+    assert lines == [
+        {"id": 0, "processed": True},
+        {"id": 1, "processed": True},
+        {"id": 2, "processed": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pipe_with_hooks(sample_file):
+    from comio import pipe, PipeConfig
+
+    reader = AsyncJsonL(sample_file)
+    out = io.StringIO()
+    writer = AsyncJsonL(out)
+    listener = comio.as_listener(reader)
+
+    log: list[str] = []
+
+    async def on_boot():
+        log.append("boot")
+
+    async def on_close():
+        log.append("close")
+
+    cfg = PipeConfig(on_boot=[on_boot], on_close=[on_close])
+
+    async def identity(item: dict) -> dict:
+        return item
+
+    await pipe(listener, writer, identity, cfg=cfg)
+
+    assert log == ["boot", "close"]
+    out.seek(0)
+    lines = [json.loads(l) for l in out.read().strip().split("\n")]
+    assert len(lines) == 3
