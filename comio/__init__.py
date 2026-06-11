@@ -1,4 +1,4 @@
-"""comio – Composable I/O primitives for async Python."""
+"""comio - Composable I/O primitives for async Python."""
 
 from .io import (
     Batcher,

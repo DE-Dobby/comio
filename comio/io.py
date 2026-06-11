@@ -32,12 +32,7 @@ Each Reader implementation defines how to interpret its cursors.
 """
 
 
-class _EOF:
-    """Sentinel indicating the end of a data source."""
-    pass
-
-
-EOF = _EOF()
+EOF = object()
 """Singleton sentinel. Return this as ``next_cursor`` to signal
 that there is no more data to read."""
 
@@ -157,14 +152,15 @@ async def read_all(r: Reader[T_co], *, cursor: Cursor = None, n: int | None = No
     return items
 
 
-async def copy(src: Listener[T_co], dst: Batcher[T_co], n: int) -> None:
+async def copy(src: Listener[T_co], dst: Batcher[T_co], n: int | None = None) -> None:
     """Buffer items from a Listener and flush to a Batcher every ``n`` items.
 
     Args:
         src: Push-based source to consume from.
         dst: Batch sink to flush into.
-        n: Buffer size. Flushes every ``n`` items, plus any remainder at the end.
+        n: Buffer size, Defaults to 1. Flushes every ``n`` items, plus any remainder at the end.
     """
+    n = n or 1
     buf: t.List[T_co] = []
     async for item in src.listen():
         buf.append(item)
