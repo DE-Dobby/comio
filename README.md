@@ -24,13 +24,20 @@ pip install comio
 Any object with the right method is a valid `io.Reader` or `io.Writer` — no base class needed.
 
 ```python
+import json
+from dataclasses import dataclass
 import comio as io
+
+@dataclass
+class Page:
+    items: list
+    next_cursor: object
 
 class AsyncJsonL:
     def __init__(self, f):
         self.f = f
 
-    async def read(self, *, cursor=None, n=None) -> io.Page:
+    async def read(self, *, cursor=None, n=None) -> Page:
         self.f.seek(cursor or 0)
         line = self.f.readline()
         if line == "":
@@ -62,10 +69,12 @@ items = await io.read_all(reader)
 items = await io.read_all(reader, cursor=saved_cursor)
 ```
 
-#### Normalize a Reader into a stream with `as_listener`
+#### Normalize a Reader into a Listener with `as_listener`
 
 ```python
-async for item in io.as_listener(reader):
+listener = io.as_listener(reader)
+
+async for item in listener.listen():
     process(item)
 ```
 
@@ -78,24 +87,59 @@ await io.copy(listener, batcher, n=100)  # flush every 100 items
 #### Streaming pipe with backpressure
 
 ```python
-from comio import pipe
+import comio as io
+from comio import pipe, PipeConfig
+
+listener = io.as_listener(reader)
 
 async def transform(item):
     return {**item, "processed": True}
 
-await pipe(listener, writer, transform)
+await pipe(listener, writer, transform, cfg=PipeConfig(buffer=10))
+```
+
+#### Glue pipes with asyncio queues
+
+```python
+import asyncio
+from comio import pipe
+from comio.adapters.queue import QueueListener, QueueWriter
+
+q: asyncio.Queue = asyncio.Queue()
+glue_src = QueueListener(q)
+glue_dst = QueueWriter(q)
+
+async def transform(item):
+    return {**item, "step": 1}
+
+async def enrich(item):
+    return {**item, "step": 2}
+
+# pipe1: listener -> transform -> queue
+await pipe(listener, glue_dst, transform)
+glue_src.close()
+
+# pipe2: queue -> enrich -> final destination
+await pipe(glue_src, writer, enrich)
 ```
 
 ### Sync
 
 ```python
+import json
+from dataclasses import dataclass
 import comio.sync as io
+
+@dataclass
+class Page:
+    items: list
+    next_cursor: object
 
 class JsonL:
     def __init__(self, f):
         self.f = f
 
-    def read(self, *, cursor=None, n=None):
+    def read(self, *, cursor=None, n=None) -> Page:
         self.f.seek(cursor or 0)
         line = self.f.readline()
         if line == "":
@@ -114,7 +158,9 @@ for page in io.scroll(reader):
 
 items = io.read_all(reader)
 
-for item in io.as_listener(reader):
+listener = io.as_listener(reader)
+
+for item in listener.listen():
     process(item)
 ```
 
@@ -128,8 +174,10 @@ for item in io.as_listener(reader):
 | `Listener[T]` | `listen` | Push items as an async iterator |
 | `Writer[T]`   | `write`  | Accept a single item            |
 | `Batcher[T]`  | `batch`  | Accept a sequence of items      |
+| `Handler[I,O]`| `__call__`| Transform a single item         |
 
 ### Sync (`comio.sync`)
+
 
 | Protocol      | Method   | Description                |
 |---------------|----------|----------------------------|
@@ -137,3 +185,14 @@ for item in io.as_listener(reader):
 | `Listener[T]` | `listen` | Push items as an iterator  |
 | `Writer[T]`   | `write`  | Accept a single item       |
 | `Batcher[T]`  | `batch`  | Accept a sequence of items |
+
+## Adapters
+
+| Adapter | Module | Implements |
+|---------|--------|------------|
+| `QueueListener` | `comio.adapters.queue` | `Listener` |
+| `QueueWriter` | `comio.adapters.queue` | `Writer`, `Batcher` |
+| `Stdin` | `comio.adapters.std` | `Listener` |
+| `Stdout` | `comio.adapters.std` | `Writer`, `Batcher` |
+| `TextFileReader` | `comio.adapters.text_file` | `Reader` |
+| `TextFileWriter` | `comio.adapters.text_file` | `Writer`, `Batcher` |
